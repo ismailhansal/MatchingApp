@@ -1,11 +1,14 @@
 import React from 'react';
-import { View, StyleSheet, Text, ScrollView, Image, TouchableOpacity, Linking } from 'react-native';
+import { View, StyleSheet, Text, ScrollView, Image, TouchableOpacity, Linking, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, BORDER_RADIUS, commonStyles } from '../../theme';
 import Button from '../../components/common/Button';
 import { RouteProp } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../../navigation/AppNavigator';
+
+import { useEffect, useState } from 'react';
+import { getCombinedUserProfile, CombinedUserProfile } from '../../services/userService';
 
 type MentorProfileScreenRouteProp = RouteProp<RootStackParamList, 'MentorProfile'>;
 type MentorProfileScreenNavigationProp = StackNavigationProp<RootStackParamList, 'MentorProfile'>;
@@ -15,39 +18,56 @@ interface MentorProfileScreenProps {
   navigation: MentorProfileScreenNavigationProp;
 }
 
-// Mock data - replace with actual data from your backend
-const mockMentor = {
-  id: '1',
-  name: 'Dr. Sarah Johnson',
-  role: 'Senior Software Engineer',
-  company: 'TechCorp',
-  experience: '8 years',
-  bio: 'Experienced software engineer with expertise in React Native, Node.js, and cloud architecture. Passionate about mentoring the next generation of developers.',
-  skills: ['React Native', 'JavaScript', 'TypeScript', 'Node.js', 'AWS', 'MongoDB'],
-  education: 'Ph.D. in Computer Science, Stanford University',
-  location: 'San Francisco, CA',
-  languages: ['English', 'Spanish'],
-  availability: 'Mon-Fri, 6-9 PM',
-  rating: 4.9,
-  reviews: 128,
-  avatar: 'https://randomuser.me/api/portraits/women/44.jpg',
-  isAvailable: true,
-  linkedin: 'https://linkedin.com/in/sarahjohnson',
-  github: 'https://github.com/sarahjohnson',
-};
-
 const MentorProfileScreen: React.FC<MentorProfileScreenProps> = ({ route, navigation }) => {
-  const { userId } = route.params; // You can use this to fetch the specific mentor's data
-  const mentor = mockMentor; // In a real app, fetch this data based on userId
+  const { userId } = route.params;
+  const [mentor, setMentor] = useState<CombinedUserProfile | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    const loadMentor = async () => {
+      try {
+        const profile = await getCombinedUserProfile(userId);
+        setMentor(profile);
+      } catch (error) {
+        console.error('Error loading mentor profile:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    
+    loadMentor();
+  }, [userId]);
+
+  if (loading) {
+    return (
+      <View style={[commonStyles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color={COLORS.primary} />
+      </View>
+    );
+  }
+
+  if (!mentor) {
+    return (
+      <View style={[commonStyles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <Text style={{ color: COLORS.text }}>Mentor not found</Text>
+      </View>
+    );
+  }
+
+  if (!mentor) {
+    return <Text>Mentor not found</Text>;
+  }
+
+  const mentorData = mentor.mentorData;
 
   const handleBookSession = () => {
     // Implement booking logic
-    console.log('Book session with', mentor.name);
+    console.log('Book session with', mentor.fullName);
   };
 
   const handleMessage = () => {
     // Implement messaging logic
-    console.log('Message', mentor.name);
+    console.log('Message', mentor.fullName);
   };
 
   const openLink = (url: string) => {
@@ -59,27 +79,19 @@ const MentorProfileScreen: React.FC<MentorProfileScreenProps> = ({ route, naviga
       <ScrollView contentContainerStyle={styles.scrollContent}>
         <View style={styles.header}>
           <View style={styles.avatarContainer}>
-            <Image source={{ uri: mentor.avatar }} style={styles.avatar} />
-            {mentor.isAvailable && <View style={styles.availableBadge} />}
+            <Image source={{ uri: mentor.avatar || 'https://randomuser.me/api/portraits/women/44.jpg' }} style={styles.avatar} />
           </View>
-          <Text style={styles.name}>{mentor.name}</Text>
-          <Text style={styles.role}>{mentor.role} at {mentor.company}</Text>
-          
-          <View style={styles.ratingContainer}>
-            <Ionicons name="star" size={20} color={COLORS.warning} />
-            <Text style={styles.ratingText}>
-              {mentor.rating} ({mentor.reviews} reviews)
-            </Text>
-          </View>
+          <Text style={styles.name}>{mentor.fullName}</Text>
+          <Text style={styles.role}>{mentor.role}</Text>
           
           <View style={styles.availabilityContainer}>
             <Ionicons 
-              name={mentor.isAvailable ? 'checkmark-circle' : 'close-circle'} 
+              name="checkmark-circle" 
               size={16} 
-              color={mentor.isAvailable ? COLORS.success : COLORS.error} 
+              color={COLORS.success} 
             />
             <Text style={styles.availabilityText}>
-              {mentor.isAvailable ? 'Available for mentoring' : 'Currently unavailable'}
+              Available for mentoring
             </Text>
           </View>
           
@@ -89,7 +101,6 @@ const MentorProfileScreen: React.FC<MentorProfileScreenProps> = ({ route, naviga
               onPress={handleBookSession} 
               variant="outline"
               style={styles.actionButton}
-              disabled={!mentor.isAvailable}
             />
             <Button 
               title="Message" 
@@ -101,13 +112,13 @@ const MentorProfileScreen: React.FC<MentorProfileScreenProps> = ({ route, naviga
         
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>About</Text>
-          <Text style={styles.bioText}>{mentor.bio}</Text>
+          <Text style={styles.bioText}>{mentorData?.bio || 'No bio available'}</Text>
         </View>
         
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Skills & Expertise</Text>
           <View style={styles.skillsContainer}>
-            {mentor.skills.map((skill, index) => (
+            {mentorData?.skills && mentorData.skills.map((skill, index) => (
               <View key={index} style={styles.skillTag}>
                 <Text style={styles.skillText}>{skill}</Text>
               </View>
@@ -120,7 +131,7 @@ const MentorProfileScreen: React.FC<MentorProfileScreenProps> = ({ route, naviga
             <Ionicons name="briefcase" size={20} color={COLORS.primary} style={styles.detailIcon} />
             <View>
               <Text style={styles.detailLabel}>Experience</Text>
-              <Text style={styles.detailText}>{mentor.experience}</Text>
+              <Text style={styles.detailText}>{mentorData?.experience || 'Not specified'}</Text>
             </View>
           </View>
           
@@ -128,7 +139,7 @@ const MentorProfileScreen: React.FC<MentorProfileScreenProps> = ({ route, naviga
             <Ionicons name="school" size={20} color={COLORS.primary} style={styles.detailIcon} />
             <View>
               <Text style={styles.detailLabel}>Education</Text>
-              <Text style={styles.detailText} numberOfLines={2}>{mentor.education}</Text>
+              <Text style={styles.detailText} numberOfLines={2}>{mentorData?.education || 'Not specified'}</Text>
             </View>
           </View>
           
@@ -136,7 +147,7 @@ const MentorProfileScreen: React.FC<MentorProfileScreenProps> = ({ route, naviga
             <Ionicons name="location" size={20} color={COLORS.primary} style={styles.detailIcon} />
             <View>
               <Text style={styles.detailLabel}>Location</Text>
-              <Text style={styles.detailText}>{mentor.location}</Text>
+              <Text style={styles.detailText}>{mentorData?.location || 'Not specified'}</Text>
             </View>
           </View>
           
@@ -144,7 +155,7 @@ const MentorProfileScreen: React.FC<MentorProfileScreenProps> = ({ route, naviga
             <Ionicons name="language" size={20} color={COLORS.primary} style={styles.detailIcon} />
             <View>
               <Text style={styles.detailLabel}>Languages</Text>
-              <Text style={styles.detailText}>{mentor.languages.join(', ')}</Text>
+              <Text style={styles.detailText}>{mentorData?.languages?.join(', ') || 'Not specified'}</Text>
             </View>
           </View>
           
@@ -152,7 +163,7 @@ const MentorProfileScreen: React.FC<MentorProfileScreenProps> = ({ route, naviga
             <Ionicons name="time" size={20} color={COLORS.primary} style={styles.detailIcon} />
             <View>
               <Text style={styles.detailLabel}>Availability</Text>
-              <Text style={styles.detailText}>{mentor.availability}</Text>
+              <Text style={styles.detailText}>{mentorData?.availability || 'Not specified'}</Text>
             </View>
           </View>
         </View>
@@ -160,25 +171,21 @@ const MentorProfileScreen: React.FC<MentorProfileScreenProps> = ({ route, naviga
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Connect</Text>
           <View style={styles.socialLinks}>
-            {mentor.linkedin && (
-              <TouchableOpacity 
-                style={styles.socialButton}
-                onPress={() => openLink(mentor.linkedin)}
-              >
-                <Ionicons name="logo-linkedin" size={24} color={COLORS.primary} />
-                <Text style={styles.socialButtonText}>LinkedIn</Text>
-              </TouchableOpacity>
-            )}
+            <TouchableOpacity 
+              style={styles.socialButton}
+              onPress={() => openLink('https://linkedin.com')}
+            >
+              <Ionicons name="logo-linkedin" size={24} color={COLORS.primary} />
+              <Text style={styles.socialButtonText}>LinkedIn</Text>
+            </TouchableOpacity>
             
-            {mentor.github && (
-              <TouchableOpacity 
-                style={styles.socialButton}
-                onPress={() => openLink(mentor.github)}
-              >
-                <Ionicons name="logo-github" size={24} color={COLORS.primary} />
-                <Text style={styles.socialButtonText}>GitHub</Text>
-              </TouchableOpacity>
-            )}
+            <TouchableOpacity 
+              style={styles.socialButton}
+              onPress={() => openLink('https://github.com')}
+            >
+              <Ionicons name="logo-github" size={24} color={COLORS.primary} />
+              <Text style={styles.socialButtonText}>GitHub</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </ScrollView>

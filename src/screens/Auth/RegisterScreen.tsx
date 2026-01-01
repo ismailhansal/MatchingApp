@@ -7,7 +7,11 @@ import { COLORS, SPACING, commonStyles } from '../../theme';
 import Button from '../../components/common/Button';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+
+import { createUserWithEmailAndPassword } from 'firebase/auth';
+import { auth, db } from '../../config/firebase';
+import { doc, setDoc } from 'firebase/firestore';
+import { getDefaultAvatarUrl } from '../../services/imageService';
 
 type RegisterScreenNavigationProp = StackNavigationProp<RootStackParamList, 'Register'>;
 type RegisterScreenRouteProp = RouteProp<RootStackParamList, 'Register'>;
@@ -17,7 +21,7 @@ interface RegisterScreenProps {
 }
 
 const RegisterScreen: React.FC<RegisterScreenProps> = ({ route }) => {
-  const { role } = route.params;
+  const { role = 'mentee' } = route.params || {};
   
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
@@ -25,40 +29,96 @@ const RegisterScreen: React.FC<RegisterScreenProps> = ({ route }) => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   
   const navigation = useNavigation<RegisterScreenNavigationProp>();
 
-  const handleRegister = () => {
+  const validateEmail = (email: string): boolean => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  };
+
+  const getErrorMessage = (errorCode: string): string => {
+    switch (errorCode) {
+      case 'auth/invalid-email':
+        return 'Invalid email address';
+      case 'auth/email-already-in-use':
+        return 'An account with this email already exists';
+      case 'auth/weak-password':
+        return 'Password is too weak. Please use at least 6 characters';
+      case 'auth/network-request-failed':
+        return 'Network error. Please check your connection';
+      default:
+        return 'An error occurred. Please try again';
+    }
+  };
+
+  const handleRegister = async () => {
+    setError(null);
+    
     if (!fullName || !email || !password || !confirmPassword) {
-      // Show error message
+      setError('Please fill in all fields');
       return;
     }
-    
+
+    if (fullName.trim().length < 2) {
+      setError('Please enter your full name');
+      return;
+    }
+
+    if (!validateEmail(email)) {
+      setError('Please enter a valid email address');
+      return;
+    }
+  
+    if (password.length < 6) {
+      setError('Password must be at least 6 characters');
+      return;
+    }
+
     if (password !== confirmPassword) {
-      // Show password mismatch error
+      setError('Passwords do not match');
       return;
     }
-    
+  
     setIsLoading(true);
-    
-    // TODO: Implement registration logic with Firebase Auth
-    console.log('Register with:', { fullName, email, password, role });
-    
-    // Simulate API call
-    setTimeout(async () => {
-      setIsLoading(false);
-      // Store auth token/flag to mark user as authenticated
-      try {
-        await AsyncStorage.setItem('@userToken', 'fake_token_' + Date.now());
-      } catch (error) {
-        console.error('Error storing token:', error);
-      }
-      // Navigate to main app after successful registration
-      navigation.reset({
-        index: 0,
-        routes: [{ name: 'Main' }],
+    try {
+      // Create user in Firebase Auth
+      const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
+      const user = userCredential.user;
+      
+      // Create global user profile in Firestore
+      await setDoc(doc(db, 'users', user.uid), {
+        id: user.uid,
+        email: user.email,
+        fullName: fullName.trim(),
+        role: role,
+        createdAt: new Date().toISOString(),
+        isPublic: true,
+        avatar: getDefaultAvatarUrl(user.uid),
       });
-    }, 1500);
+
+      // Create role-specific profile document
+      const collectionName = role === 'mentor' ? 'mentors' : 'mentees';
+      await setDoc(doc(db, collectionName, user.uid), {
+        bio: '',
+        skills: [],
+        location: '',
+        experience: '',
+        education: '',
+        languages: [],
+        availability: 'anytime',
+        ...(role === 'mentor' && { hourlyRate: 0 }),
+      });
+
+      // User is now authenticated, navigate to main app
+      navigation.replace('Main');
+    } catch (error: any) {
+      const errorMessage = getErrorMessage(error.code || 'auth/unknown-error');
+      setError(errorMessage);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const navigateToLogin = () => {
@@ -146,11 +206,18 @@ const RegisterScreen: React.FC<RegisterScreenProps> = ({ route }) => {
               />
             </View>
 
+            {error && (
+              <View style={styles.errorContainer}>
+                <Ionicons name="alert-circle" size={20} color={COLORS.error} />
+                <Text style={styles.errorText}>{error}</Text>
+              </View>
+            )}
+
             <Button
               title="Create Account"
               onPress={handleRegister}
               loading={isLoading}
-              disabled={!fullName || !email || !password || !confirmPassword}
+              disabled={!fullName || !email || !password || !confirmPassword || isLoading}
               fullWidth
               style={styles.registerButton}
             />
@@ -220,6 +287,22 @@ const styles = StyleSheet.create({
   },
   visibilityToggle: {
     padding: SPACING.md,
+  },
+  errorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.error,
+    borderRadius: 8,
+    padding: SPACING.sm,
+    marginBottom: SPACING.md,
+  },
+  errorText: {
+    color: COLORS.error,
+    fontSize: 14,
+    marginLeft: SPACING.xs,
+    flex: 1,
   },
   registerButton: {
     marginTop: SPACING.sm,

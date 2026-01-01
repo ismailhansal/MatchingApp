@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   View, 
   StyleSheet, 
@@ -6,17 +6,23 @@ import {
   TouchableOpacity, 
   Text, 
   Image, 
-  ListRenderItem 
+  ListRenderItem,
+  ActivityIndicator,
+  ScrollView
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, commonStyles } from '../../theme';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../../navigation/AppNavigator';
+import { useAuthState } from '../../hooks/useAuthState';
+import { subscribeToUserConversations, Conversation, getOtherParticipant } from '../../services/chatService';
+import { getUserMatches } from '../../services/swipeService';
+import { getUserProfile } from '../../services/userService';
 
 type ChatListScreenNavigationProp = NativeStackNavigationProp<RootStackParamList, 'ChatList'>;
 
 interface ChatItem {
-  id: string;
+  conversationId: string;
   name: string;
   lastMessage: string;
   time: string;
@@ -29,56 +35,101 @@ interface ChatListScreenProps {
   navigation: ChatListScreenNavigationProp;
 }
 
-// Mock data - replace with actual data from your backend
-const mockChats = [
-  {
-    id: '1',
-    name: 'Sarah Johnson',
-    lastMessage: 'Hey! How are you doing?',
-    time: '2h ago',
-    unread: 2,
-    avatar: 'https://randomuser.me/api/portraits/women/44.jpg',
-    isOnline: true,
-  },
-  {
-    id: '2',
-    name: 'Michael Chen',
-    lastMessage: 'Let\'s schedule a call for tomorrow',
-    time: '5h ago',
-    unread: 0,
-    avatar: 'https://randomuser.me/api/portraits/men/32.jpg',
-    isOnline: false,
-  },
-  {
-    id: '3',
-    name: 'Alex Rodriguez',
-    lastMessage: 'I\'ve reviewed your project',
-    time: '1d ago',
-    unread: 0,
-    avatar: 'https://randomuser.me/api/portraits/men/22.jpg',
-    isOnline: true,
-  },
-  {
-    id: '4',
-    name: 'Emma Wilson',
-    lastMessage: 'Thanks for the feedback!',
-    time: '2d ago',
-    unread: 0,
-    avatar: 'https://randomuser.me/api/portraits/women/33.jpg',
-    isOnline: false,
-  },
-];
-
 const ChatListScreen: React.FC<ChatListScreenProps> = ({ navigation }) => {
+  const [authUser, loading] = useAuthState();
   const [searchQuery, setSearchQuery] = useState('');
-  const [chats, setChats] = useState(mockChats);
+  const [chats, setChats] = useState<ChatItem[]>([]);
+  const [conversationsLoading, setConversationsLoading] = useState(true);
+  const [matchedProfiles, setMatchedProfiles] = useState<any[]>([]);
+  const [matchesLoading, setMatchesLoading] = useState(true);
+
+  useEffect(() => {
+    if (!authUser) {
+      setConversationsLoading(false);
+      return;
+    }
+
+    setConversationsLoading(true);
+    const unsubscribe = subscribeToUserConversations(authUser.uid, (conversations: Conversation[]) => {
+      const chatItems: ChatItem[] = conversations.map((conversation) => {
+        const otherParticipant = getOtherParticipant(conversation, authUser.uid);
+        
+        return {
+          conversationId: conversation.id,
+          name: otherParticipant?.name || 'Unknown User',
+          lastMessage: conversation.lastMessage || 'No messages yet',
+          time: formatTime(conversation.lastMessageTime),
+          unread: conversation.unreadCount,
+          avatar: otherParticipant?.avatar || 'https://api.dicebear.com/7.x/avataaars/svg?seed=default',
+          isOnline: true, // TODO: Implement online status
+        };
+      });
+      
+      setChats(chatItems);
+      setConversationsLoading(false);
+    });
+
+    return () => unsubscribe();
+  }, [authUser]);
+
+  // Load matched profiles
+  useEffect(() => {
+    if (!authUser) {
+      setMatchesLoading(false);
+      return;
+    }
+
+    const loadMatches = async () => {
+      try {
+        setMatchesLoading(true);
+        const matches = await getUserMatches(authUser.uid);
+        
+        // Get profiles for matched users
+        const matchedProfilesData = await Promise.all(
+          matches.map(async (match) => {
+            const otherUserId = match.mentorId === authUser.uid ? match.menteeId : match.mentorId;
+            const profile = await getUserProfile(otherUserId);
+            return {
+              id: otherUserId,
+              name: profile?.fullName || 'User',
+              avatar: profile?.avatar || 'https://api.dicebear.com/7.x/avataaars/svg?seed=default',
+            };
+          })
+        );
+        
+        setMatchedProfiles(matchedProfilesData);
+      } catch (error) {
+        console.error('Error loading matched profiles:', error);
+      } finally {
+        setMatchesLoading(false);
+      }
+    };
+
+    loadMatches();
+  }, [authUser]);
+
+  const formatTime = (date: Date): string => {
+    const now = new Date();
+    const diff = now.getTime() - date.getTime();
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(diff / 3600000);
+    const days = Math.floor(diff / 86400000);
+
+    if (minutes < 1) return 'now';
+    if (minutes < 60) return `${minutes}m ago`;
+    if (hours < 24) return `${hours}h ago`;
+    if (days === 1) return 'yesterday';
+    if (days < 7) return `${days}d ago`;
+    
+    return date.toLocaleDateString();
+  };
 
   const renderChatItem: ListRenderItem<ChatItem> = ({ item }) => (
     <TouchableOpacity 
       style={styles.chatItem}
       onPress={() => navigation.navigate('Chat', { 
-        chatId: item.id,
-        recipientId: item.id,
+        chatId: item.conversationId,
+        recipientId: item.conversationId,
         recipientName: item.name
       })}
     >
@@ -111,6 +162,14 @@ const ChatListScreen: React.FC<ChatListScreenProps> = ({ navigation }) => {
     </TouchableOpacity>
   );
 
+  if (loading || conversationsLoading) {
+    return (
+      <View style={[commonStyles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color={COLORS.primary} />
+      </View>
+    );
+  }
+
   return (
     <View style={commonStyles.container}>
       <View style={styles.header}>
@@ -120,13 +179,57 @@ const ChatListScreen: React.FC<ChatListScreenProps> = ({ navigation }) => {
         </TouchableOpacity>
       </View>
 
-      <FlatList
-        data={chats}
-        renderItem={renderChatItem}
-        keyExtractor={item => item.id}
-        contentContainerStyle={styles.chatList}
-        showsVerticalScrollIndicator={false}
-      />
+      {/* Matched Profiles Slider */}
+      {matchedProfiles.length > 0 && (
+        <View style={styles.matchedSection}>
+          <Text style={styles.matchedTitle}>Your Matches</Text>
+          <FlatList
+            data={matchedProfiles}
+            renderItem={({ item }) => (
+              <TouchableOpacity 
+                style={styles.matchedProfile}
+                onPress={() => {
+                  // Create conversation ID using sorted participant IDs
+                  const conversationId = [authUser!.uid, item.id].sort().join('_');
+                  navigation.navigate('Chat', {
+                    chatId: conversationId,
+                    recipientId: item.id,
+                    recipientName: item.name,
+                  });
+                }}
+              >
+                <Image 
+                  source={{ uri: item.avatar }} 
+                  style={styles.matchedAvatar}
+                />
+                <View style={styles.matchedBadge} />
+                <Text style={styles.matchedName} numberOfLines={1}>{item.name}</Text>
+              </TouchableOpacity>
+            )}
+            keyExtractor={item => item.id}
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            scrollEventThrottle={16}
+            contentContainerStyle={styles.matchedList}
+          />
+        </View>
+      )}
+
+      {chats.length === 0 ? (
+        <View style={[styles.emptyState]}>
+          <Ionicons name="chatbubbles-outline" size={48} color={COLORS.textTertiary} />
+          <Text style={styles.emptyText}>No conversations yet</Text>
+          <Text style={styles.emptySubtext}>Start messaging with someone to begin</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={chats}
+          renderItem={renderChatItem}
+          keyExtractor={item => item.conversationId}
+          contentContainerStyle={styles.chatList}
+          showsVerticalScrollIndicator={false}
+        />
+      )}
     </View>
   );
 };
@@ -147,6 +250,22 @@ const styles = StyleSheet.create({
   },
   chatList: {
     padding: SPACING.md,
+  },
+  emptyState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  emptyText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: COLORS.text,
+    marginTop: SPACING.lg,
+  },
+  emptySubtext: {
+    fontSize: 14,
+    color: COLORS.textSecondary,
+    marginTop: SPACING.sm,
   },
   chatItem: {
     flexDirection: 'row',
@@ -223,6 +342,51 @@ const styles = StyleSheet.create({
     color: COLORS.white,
     fontSize: 12,
     fontWeight: '600',
+  },
+  matchedSection: {
+    paddingHorizontal: SPACING.lg,
+    paddingVertical: SPACING.md,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  matchedTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.text,
+    marginBottom: SPACING.md,
+  },
+  matchedList: {
+    paddingHorizontal: 0,
+  },
+  matchedProfile: {
+    alignItems: 'center',
+    marginRight: SPACING.lg,
+  },
+  matchedAvatar: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    borderWidth: 2,
+    borderColor: COLORS.primary,
+    marginBottom: SPACING.sm,
+  },
+  matchedBadge: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: COLORS.success,
+    borderWidth: 2,
+    borderColor: COLORS.background,
+  },
+  matchedName: {
+    fontSize: 11,
+    color: COLORS.text,
+    fontWeight: '500',
+    maxWidth: 70,
+    textAlign: 'center',
   },
 });
 

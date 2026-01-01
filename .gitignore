@@ -1,5 +1,10 @@
 # Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
 
+# Environment variables
+.env
+.env.local
+.env.*.local
+
 # dependencies
 node_modules/
 
@@ -48,3 +53,13 @@ google-services.json
 # generated native folders
 /ios
 /android
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# API Keys and Secrets
+firebase-key.json
+google-services.json

@@ -9,13 +9,21 @@ import {
   KeyboardAvoidingView, 
   Platform,
   Image,
-  Keyboard
+  Keyboard,
+  ActivityIndicator
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, SPACING, BORDER_RADIUS, commonStyles } from '../../theme';
 import { RouteProp } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../../navigation/AppNavigator';
+import { useAuthState } from '../../hooks/useAuthState';
+import { getCombinedUserProfile } from '../../services/userService';
+import { 
+  subscribeToMessages, 
+  sendMessage, 
+  Message 
+} from '../../services/chatService';
 
 type ChatScreenRouteProp = RouteProp<RootStackParamList, 'Chat'>;
 type ChatScreenNavigationProp = StackNavigationProp<RootStackParamList, 'Chat'>;
@@ -25,29 +33,18 @@ interface ChatScreenProps {
   navigation: ChatScreenNavigationProp;
 }
 
-// Mock messages data
-const mockMessages = [
-  { id: '1', text: 'Hey there! How are you doing?', sender: 'them', time: '10:30 AM' },
-  { id: '2', text: 'I\'m good, thanks for asking! How about you?', sender: 'me', time: '10:32 AM' },
-  { id: '3', text: 'I\'m doing well! Just working on some React Native stuff.', sender: 'them', time: '10:33 AM' },
-  { id: '4', text: 'That\'s great! Need any help with that?', sender: 'me', time: '10:35 AM' },
-  { 
-    id: '5', 
-    text: 'Actually yes! I was wondering if you could help me with navigation in my app.', 
-    sender: 'them', 
-    time: '10:36 AM' 
-  },
-];
-
 const ChatScreen: React.FC<ChatScreenProps> = ({ route, navigation }) => {
-  const { recipientName } = route.params;
+  const { chatId, recipientName } = route.params;
+  const [authUser, loading] = useAuthState();
   const [message, setMessage] = useState('');
-  const [messages, setMessages] = useState(mockMessages);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [messagesLoading, setMessagesLoading] = useState(true);
+  const [isSending, setIsSending] = useState(false);
   const flatListRef = useRef<FlatList>(null);
 
   useEffect(() => {
     navigation.setOptions({
-      title: recipientName,
+      headerTitle: () => <Text style={{ color: COLORS.text, fontSize: 18, fontWeight: '600' }}>{recipientName}</Text>,
       headerRight: () => (
         <TouchableOpacity style={styles.headerButton}>
           <Ionicons name="information-circle-outline" size={24} color={COLORS.text} />
@@ -56,27 +53,54 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ route, navigation }) => {
     });
   }, [navigation, recipientName]);
 
-  const handleSend = () => {
-    if (message.trim() === '') return;
-    
-    const newMessage = {
-      id: Date.now().toString(),
-      text: message,
-      sender: 'me',
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-    };
+  useEffect(() => {
+    if (!chatId) return;
 
-    setMessages([...messages, newMessage]);
-    setMessage('');
+    setMessagesLoading(true);
+    const unsubscribe = subscribeToMessages(chatId, (loadedMessages: Message[]) => {
+      setMessages(loadedMessages);
+      setMessagesLoading(false);
+      
+      // Scroll to bottom after messages load
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 100);
+    });
+
+    return () => unsubscribe();
+  }, [chatId]);
+
+  const handleSend = async () => {
+    if (message.trim() === '' || !authUser) return;
     
-    // Scroll to bottom after sending a message
-    setTimeout(() => {
-      flatListRef.current?.scrollToEnd({ animated: true });
-    }, 100);
+    setIsSending(true);
+    try {
+      const userProfile = await getCombinedUserProfile(authUser.uid);
+      
+      await sendMessage(
+        chatId,
+        authUser.uid,
+        userProfile?.fullName || 'Unknown User',
+        userProfile?.avatar || 'https://api.dicebear.com/7.x/avataaars/svg?seed=default',
+        message.trim()
+      );
+      
+      setMessage('');
+      Keyboard.dismiss();
+      
+      // Scroll to bottom after sending
+      setTimeout(() => {
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 100);
+    } catch (error) {
+      console.error('Error sending message:', error);
+    } finally {
+      setIsSending(false);
+    }
   };
 
-  const renderMessage = ({ item }: { item: any }) => {
-    const isMe = item.sender === 'me';
+  const renderMessage = ({ item }: { item: Message }) => {
+    const isMe = item.sender === authUser?.uid;
     
     return (
       <View style={[
@@ -85,7 +109,7 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ route, navigation }) => {
       ]}>
         {!isMe && (
           <Image 
-            source={{ uri: 'https://randomuser.me/api/portraits/women/44.jpg' }} 
+            source={{ uri: item.senderAvatar }} 
             style={styles.avatar}
           />
         )}
@@ -103,12 +127,20 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ route, navigation }) => {
             styles.timeText,
             isMe ? styles.myTimeText : styles.theirTimeText
           ]}>
-            {item.time}
+            {item.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
           </Text>
         </View>
       </View>
     );
   };
+
+  if (loading || messagesLoading) {
+    return (
+      <View style={[commonStyles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color={COLORS.primary} />
+      </View>
+    );
+  }
 
   return (
     <View style={commonStyles.container}>
@@ -121,6 +153,11 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ route, navigation }) => {
         onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
         onLayout={() => flatListRef.current?.scrollToEnd({ animated: true })}
         keyboardDismissMode="interactive"
+        ListEmptyComponent={
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyText}>No messages yet. Start the conversation!</Text>
+          </View>
+        }
       />
 
       <KeyboardAvoidingView 
@@ -138,17 +175,22 @@ const ChatScreen: React.FC<ChatScreenProps> = ({ route, navigation }) => {
             placeholder="Type a message..."
             placeholderTextColor={COLORS.textTertiary}
             multiline
+            editable={!isSending}
           />
           <TouchableOpacity 
-            style={[styles.sendButton, !message && styles.sendButtonDisabled]}
+            style={[styles.sendButton, (!message || isSending) && styles.sendButtonDisabled]}
             onPress={handleSend}
-            disabled={!message}
+            disabled={!message || isSending}
           >
-            <Ionicons 
-              name="send" 
-              size={20} 
-              color={message ? COLORS.primary : COLORS.textTertiary} 
-            />
+            {isSending ? (
+              <ActivityIndicator size="small" color={COLORS.primary} />
+            ) : (
+              <Ionicons 
+                name="send" 
+                size={20} 
+                color={message ? COLORS.primary : COLORS.textTertiary} 
+              />
+            )}
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -163,6 +205,15 @@ const styles = StyleSheet.create({
   messagesContainer: {
     padding: SPACING.md,
     paddingBottom: SPACING.xl,
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  emptyText: {
+    fontSize: 16,
+    color: COLORS.textSecondary,
   },
   messageBubble: {
     flexDirection: 'row',

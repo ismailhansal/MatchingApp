@@ -1,27 +1,27 @@
-import React, { useEffect, useState } from 'react';
-import { NavigationContainer } from '@react-navigation/native';
+import React, { useEffect, useState, useRef } from 'react';
+import { NavigationContainer, NavigationContainerRef } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
-import { getAuth, onAuthStateChanged, User } from 'firebase/auth';
-import { ActivityIndicator, View } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { onAuthStateChanged } from 'firebase/auth';
+import { ActivityIndicator, View, Text } from 'react-native';
 
 import { navigationTheme, COLORS, SPACING } from '../theme';
+import { auth } from '../config/firebase';
 
-// Import screens with type assertions to handle default exports
-const OnboardingFlow = require('../screens/Onboarding/OnboardingFlow').default;
-const LoginScreen = require('../screens/Auth/LoginScreen').default;
-const RegisterScreen = require('../screens/Auth/RegisterScreen').default;
-const ForgotPasswordScreen = require('../screens/Auth/ForgotPasswordScreen').default;
-const SwipeScreen = require('../screens/Swipe/SwipeScreen').default;
-const ProfileScreen = require('../screens/Profile/ProfileScreen').default;
-const EditProfileScreen = require('../screens/Profile/EditProfileScreen').default;
-const SettingsScreen = require('../screens/Profile/SettingsScreen').default;
-const ChatListScreen = require('../screens/Chat/ChatListScreen').default;
-const ChatScreen = require('../screens/Chat/ChatScreen').default;
-const FeedScreen = require('../screens/Feed/FeedScreen').default;
-const MentorProfileScreen = require('../screens/Profile/MentorProfileScreen').default;
+// Import screens
+import OnboardingFlow from '../screens/Onboarding/OnboardingFlow';
+import LoginScreen from '../screens/Auth/LoginScreen';
+import RegisterScreen from '../screens/Auth/RegisterScreen';
+import ForgotPasswordScreen from '../screens/Auth/ForgotPasswordScreen';
+import SwipeScreen from '../screens/Swipe/SwipeScreen';
+import ProfileScreen from '../screens/Profile/ProfileScreen';
+import EditProfileScreen from '../screens/Profile/EditProfileScreen';
+import SettingsScreen from '../screens/Profile/SettingsScreen';
+import ChatListScreen from '../screens/Chat/ChatListScreen';
+import ChatScreen from '../screens/Chat/ChatScreen';
+import FeedScreen from '../screens/Feed/FeedScreen';
+import MentorProfileScreen from '../screens/Profile/MentorProfileScreen';
 
 export type RootStackParamList = {
   Onboarding: undefined;
@@ -70,6 +70,19 @@ const MainTabs = () => {
 
           return <Ionicons name={iconName as any} size={size} color={color} />;
         },
+        tabBarLabel: ({ focused, color }) => {
+          let label = '';
+          if (route.name === 'Swipe') {
+            label = 'Discover';
+          } else if (route.name === 'ChatList') {
+            label = 'Messages';
+          } else if (route.name === 'Feed') {
+            label = 'Feed';
+          } else if (route.name === 'Profile') {
+            label = 'Profile';
+          }
+          return <Text style={{ color, fontSize: 12 }}>{label}</Text>;
+        },
         tabBarActiveTintColor: COLORS.primary,
         tabBarInactiveTintColor: COLORS.textTertiary,
         tabBarStyle: {
@@ -87,73 +100,69 @@ const MainTabs = () => {
       <Tab.Screen 
         name="Swipe" 
         component={SwipeScreen} 
-        options={{ title: 'Discover' }}
       />
       <Tab.Screen 
         name="ChatList" 
         component={ChatListScreen} 
-        options={{ title: 'Messages' }}
       />
       <Tab.Screen 
         name="Feed" 
         component={FeedScreen} 
-        options={{ title: 'Feed' }}
       />
       <Tab.Screen 
         name="Profile" 
         component={ProfileScreen} 
-        options={{ title: 'Profile' }}
       />
     </Tab.Navigator>
   );
 };
 
-// Auth Stack
-const AuthStack = () => (
-  <Stack.Navigator screenOptions={{ headerShown: false }}>
-    <Stack.Screen name="Login" component={LoginScreen} />
-    <Stack.Screen name="Register" component={RegisterScreen} />
-    <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
-  </Stack.Navigator>
-);
-
 // Main App Navigator
 const AppNavigator = () => {
   const [isLoading, setIsLoading] = useState(true);
-  const [isFirstLaunch, setIsFirstLaunch] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const navigationRef = useRef<NavigationContainerRef<RootStackParamList>>(null);
+  const previousAuthState = useRef<boolean | null>(null);
 
   useEffect(() => {
-    const checkAuth = async () => {
-      try {
-        // Check if it's the first launch
-        const firstLaunch = await AsyncStorage.getItem('@firstLaunch');
-        setIsFirstLaunch(firstLaunch === null);
-        
-        // Check if user has a stored token (for development/testing without Firebase)
-        const userToken = await AsyncStorage.getItem('@userToken');
-        setIsAuthenticated(!!userToken);
-        setIsLoading(false);
-        
-        // TODO: Replace with actual Firebase auth when ready:
-        /*
-        const auth = getAuth();
-        const unsubscribe = onAuthStateChanged(auth, (user) => {
-          setIsAuthenticated(!!user);
-          setIsLoading(false);
-        });
-        
-        return () => unsubscribe();
-        */
-      } catch (error) {
-        console.error('Error checking auth state:', error);
-        // Set as unauthenticated on error to show auth screens
-        setIsAuthenticated(false);
-        setIsLoading(false);
-      }
-    };
+    // Subscribe to auth state
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      const authenticated = !!user;
+      const wasAuthenticated = previousAuthState.current;
+      
+      console.log('Auth state changed:', {
+        authenticated,
+        wasAuthenticated,
+        userId: user?.uid,
+      });
+      
+      setIsAuthenticated(authenticated);
+      setIsLoading(false);
 
-    checkAuth();
+      // Reset navigation when auth state changes (but not on initial load)
+      // Only navigate if the state actually changed and navigation is ready
+      if (wasAuthenticated !== null && wasAuthenticated !== authenticated && navigationRef.current?.isReady()) {
+        console.log('Navigating due to auth state change. Authenticated:', authenticated);
+        if (authenticated) {
+          // User just logged in - navigate to Main
+          navigationRef.current.reset({
+            index: 0,
+            routes: [{ name: 'Main' }],
+          });
+        } else {
+          // User just logged out - navigate to Login
+          navigationRef.current.reset({
+            index: 0,
+            routes: [{ name: 'Login' }],
+          });
+        }
+      }
+      
+      previousAuthState.current = authenticated;
+    });
+
+    // Cleanup subscription
+    return () => unsubscribe();
   }, []);
 
   if (isLoading) {
@@ -165,37 +174,30 @@ const AppNavigator = () => {
   }
 
   return (
-    <NavigationContainer theme={navigationTheme}>
+    <NavigationContainer ref={navigationRef} theme={navigationTheme}>
       <Stack.Navigator 
         screenOptions={{ headerShown: false }}
-        initialRouteName={isFirstLaunch ? 'Onboarding' : (isAuthenticated ? 'Main' : 'Auth')}
+        initialRouteName={isAuthenticated ? "Main" : "Login"}
       >
-        {/* Always render Onboarding for first launch */}
-        <Stack.Screen 
-          name="Onboarding" 
-          component={OnboardingFlow} 
-          options={{ animationEnabled: false }}
-        />
-        
-        {/* Auth Screens - always available */}
+        {/* Auth Screens */}
         <Stack.Screen 
           name="Login" 
-          component={LoginScreen} 
-          options={{ animationEnabled: true }}
+          component={LoginScreen}
         />
         <Stack.Screen 
           name="Register" 
-          component={RegisterScreen} 
-          options={{ animationEnabled: true }}
+          component={RegisterScreen}
         />
         <Stack.Screen 
           name="ForgotPassword" 
-          component={ForgotPasswordScreen} 
-          options={{ animationEnabled: true }}
+          component={ForgotPasswordScreen}
         />
         
-        {/* Auth Stack - for non-first-launch navigation */}
-        <Stack.Screen name="Auth" component={AuthStack} />
+        {/* Onboarding - for signup flow */}
+        <Stack.Screen 
+          name="Onboarding" 
+          component={OnboardingFlow}
+        />
         
         {/* Main App */}
         <Stack.Screen name="Main" component={MainTabs} />
@@ -203,25 +205,25 @@ const AppNavigator = () => {
         {/* Authenticated-only screens */}
         <Stack.Screen 
           name="MentorProfile" 
-          component={MentorProfileScreen} 
-          options={{ headerShown: true, title: 'Mentor Profile' }}
+          component={MentorProfileScreen}
+          options={{ headerShown: true, headerTitle: () => <Text style={{ color: COLORS.text, fontSize: 18, fontWeight: '600' }}>Mentor Profile</Text> }}
         />
         <Stack.Screen 
           name="EditProfile" 
-          component={EditProfileScreen} 
-          options={{ headerShown: true, title: 'Edit Profile' }}
+          component={EditProfileScreen}
+          options={{ headerShown: true, headerTitle: () => <Text style={{ color: COLORS.text, fontSize: 18, fontWeight: '600' }}>Edit Profile</Text> }}
         />
         <Stack.Screen 
           name="Settings" 
-          component={SettingsScreen} 
-          options={{ headerShown: true, title: 'Settings' }}
+          component={SettingsScreen}
+          options={{ headerShown: true, headerTitle: () => <Text style={{ color: COLORS.text, fontSize: 18, fontWeight: '600' }}>Settings</Text> }}
         />
         <Stack.Screen 
           name="Chat" 
           component={ChatScreen} 
           options={({ route }) => ({
             headerShown: true,
-            title: route.params?.recipientName || 'Chat',
+            headerTitle: () => <Text style={{ color: COLORS.text, fontSize: 18, fontWeight: '600' }}>{route.params?.recipientName || 'Chat'}</Text>,
           })}
         />
       </Stack.Navigator>

@@ -1,10 +1,29 @@
 import React, { useState } from 'react';
-import { View, StyleSheet, ScrollView, TextInput, TouchableOpacity, Text, Image, Switch, Picker } from 'react-native';
+import { View, StyleSheet, ScrollView, TextInput, TouchableOpacity, Text, Image, Switch, Alert } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import { StackNavigationProp } from '@react-navigation/stack';
 import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
 import { COLORS, SPACING, BORDER_RADIUS, commonStyles } from '../../theme';
 import Button from '../../components/common/Button';
+import { RootStackParamList } from '../../navigation/AppNavigator';
+
+import { useAuthState } from './../../hooks/useAuthState';
+import { 
+  updateUserProfile, 
+  updateMentorProfile, 
+  updateMenteeProfile,
+  getCombinedUserProfile,
+  UserProfile,
+  MentorProfile,
+  MenteeProfile
+} from '../../services/userService';
+import { uploadProfileImage, getDefaultAvatarUrl } from '../../services/imageService';
+import { useEffect } from 'react';
+
 
 const EditProfileScreen = () => {
+  const navigation = useNavigation<StackNavigationProp<RootStackParamList, 'EditProfile'>>();
   const [name, setName] = useState('John Doe');
   const [bio, setBio] = useState('Experienced software engineer with 5+ years of experience');
   const [location, setLocation] = useState('San Francisco, CA');
@@ -18,25 +37,150 @@ const EditProfileScreen = () => {
   const [availability, setAvailability] = useState('weekends');
   const [isPublic, setIsPublic] = useState(true);
   const [notifications, setNotifications] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [avatar, setAvatar] = useState('');
 
-  const handleSave = () => {
-    console.log('Saving profile...', {
-      name, bio, location, experience, education, skills, role, sector, languages, hourlyRate, availability, isPublic, notifications
-    });
+  const [user] = useAuthState();
+
+  useEffect(() => {
+    const loadProfile = async () => {
+      if (!user) return;
+      try {
+        const profile = await getCombinedUserProfile(user.uid);
+        if (profile) {
+          setName(profile.fullName);
+          setRole(profile.role);
+          setIsPublic(profile.isPublic);
+          setAvatar(profile.avatar || getDefaultAvatarUrl(user.uid));
+          
+          // Load role-specific data
+          const roleData = profile.role === 'mentor' ? profile.mentorData : profile.menteeData;
+          if (roleData) {
+            setBio(roleData.bio || '');
+            setLocation(roleData.location || '');
+            setExperience(roleData.experience || '');
+            setEducation(roleData.education || '');
+            setSkills(roleData.skills?.join(', ') || '');
+            setLanguages(roleData.languages?.join(', ') || '');
+            setAvailability(roleData.availability || '');
+            
+            // Mentor-specific data
+            if (profile.role === 'mentor' && 'hourlyRate' in roleData) {
+              const mentorData = roleData as MentorProfile;
+              if (mentorData.hourlyRate) setHourlyRate(mentorData.hourlyRate.toString());
+            }
+          }
+        }
+      } catch (error) {
+        console.error('Error loading profile:', error);
+      }
+    };
+    
+    loadProfile();
+  }, [user]);
+
+  const handlePickImage = async () => {
+    try {
+      // Request permissions first to ensure fresh access
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      
+      if (status !== 'granted') {
+        Alert.alert('Permission needed', 'Please allow access to your photo library');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+        exif: false, // Don't include EXIF data to reduce file size
+      });
+
+      if (!result.canceled) {
+        const imageUri = result.assets[0].uri;
+        setAvatar(imageUri);
+      }
+    } catch (error) {
+      console.error('Error picking image:', error);
+      Alert.alert('Error', 'Failed to pick image');
+    }
+  };
+
+  const handleSave = async () => {
+    if (!user) return;
+    
+    setIsSaving(true);
+    try {
+      let avatarUrl = avatar;
+
+      // Upload image if user selected a new one
+      if (avatar && avatar.startsWith('file://')) {
+        try {
+          console.log('Starting image upload for file:', avatar);
+          avatarUrl = await uploadProfileImage(user.uid, avatar);
+          console.log('Image uploaded successfully:', avatarUrl);
+        } catch (imageError) {
+          console.error('Image upload failed, will not save profile:', imageError);
+          Alert.alert('Error', 'Image upload failed. Please check your internet connection and try again.');
+          setIsSaving(false);
+          return; // Don't save if image upload fails
+        }
+      }
+
+      // Update global profile data
+      await updateUserProfile(user.uid, {
+        fullName: name,
+        isPublic: isPublic,
+        avatar: avatarUrl,
+      } as Partial<UserProfile>);
+
+      // Prepare role-specific data
+      const roleSpecificData = {
+        bio: bio,
+        location: location,
+        experience: experience,
+        education: education,
+        skills: skills.split(',').map(s => s.trim()).filter(s => s.length > 0),
+        languages: languages.split(',').map(l => l.trim()).filter(l => l.length > 0),
+        availability: availability,
+      };
+
+      // Update role-specific profile
+      if (role === 'mentor') {
+        const mentorData: any = {
+          ...roleSpecificData,
+          hourlyRate: hourlyRate ? parseInt(hourlyRate) : 0,
+        };
+        await updateMentorProfile(user.uid, mentorData);
+      } else {
+        await updateMenteeProfile(user.uid, roleSpecificData);
+      }
+
+      console.log('Profile updated successfully');
+      alert('Profile saved successfully!');
+      // Navigate back to Profile and trigger refresh
+      navigation.goBack();
+    } catch (error) {
+      console.error('Error saving profile:', error);
+      alert('Error saving profile. Please try again.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
     <View style={commonStyles.container}>
       <ScrollView contentContainerStyle={styles.scrollContent}>
-        <View style={styles.avatarContainer}>
+        <TouchableOpacity onPress={handlePickImage} style={styles.avatarContainer}>
           <Image 
-            source={{ uri: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&h=200&fit=crop' }} 
+            source={{ uri: avatar || getDefaultAvatarUrl(user?.uid || '') }} 
             style={styles.avatar}
           />
-          <TouchableOpacity style={styles.editPhotoButton}>
+          <View style={styles.editPhotoButton}>
             <Ionicons name="camera" size={20} color={COLORS.text} />
-          </TouchableOpacity>
-        </View>
+          </View>
+        </TouchableOpacity>
 
         <View style={styles.sectionTitle}>
           <Text style={styles.sectionTitleText}>Personal Info</Text>
@@ -227,6 +371,8 @@ const EditProfileScreen = () => {
         <Button 
           title="Save Changes" 
           onPress={handleSave} 
+          loading={isSaving}
+          disabled={isSaving}
           fullWidth 
           style={styles.saveButton}
         />

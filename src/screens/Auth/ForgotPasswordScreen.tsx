@@ -7,6 +7,8 @@ import { COLORS, SPACING, commonStyles } from '../../theme';
 import Button from '../../components/common/Button';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { sendPasswordResetEmail } from 'firebase/auth';
+import { auth } from '../../config/firebase';
 
 type ForgotPasswordScreenNavigationProp = StackNavigationProp<RootStackParamList, 'ForgotPassword'>;
 
@@ -14,25 +16,53 @@ const ForgotPasswordScreen = () => {
   const [email, setEmail] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [emailSent, setEmailSent] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   
   const navigation = useNavigation<ForgotPasswordScreenNavigationProp>();
 
-  const handleResetPassword = () => {
+  const validateEmail = (email: string): boolean => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  };
+
+  const getErrorMessage = (errorCode: string): string => {
+    switch (errorCode) {
+      case 'auth/invalid-email':
+        return 'Invalid email address';
+      case 'auth/user-not-found':
+        return 'No account found with this email';
+      case 'auth/network-request-failed':
+        return 'Network error. Please check your connection';
+      default:
+        return 'An error occurred. Please try again';
+    }
+  };
+
+  const handleResetPassword = async () => {
+    setError(null);
+    
     if (!email) {
-      // Show error message
+      setError('Please enter your email');
+      return;
+    }
+
+    if (!validateEmail(email)) {
+      setError('Please enter a valid email address');
       return;
     }
     
     setIsLoading(true);
-    
-    // TODO: Implement password reset logic with Firebase Auth
-    console.log('Reset password for:', email);
-    
-    // Simulate API call
-    setTimeout(() => {
-      setIsLoading(false);
+    try {
+      await sendPasswordResetEmail(auth, email.trim());
       setEmailSent(true);
-    }, 1500);
+      setError(null);
+    } catch (error: any) {
+      const errorMessage = getErrorMessage(error.code || 'auth/unknown-error');
+      setError(errorMessage);
+      setEmailSent(false);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const navigateToLogin = () => {
@@ -75,11 +105,18 @@ const ForgotPasswordScreen = () => {
                 />
               </View>
 
+              {error && (
+                <View style={styles.errorContainer}>
+                  <Ionicons name="alert-circle" size={20} color={COLORS.error} />
+                  <Text style={styles.errorText}>{error}</Text>
+                </View>
+              )}
+
               <Button
                 title="Send Reset Link"
                 onPress={handleResetPassword}
                 loading={isLoading}
-                disabled={!email}
+                disabled={!email || isLoading}
                 fullWidth
                 style={styles.resetButton}
               />
@@ -94,11 +131,9 @@ const ForgotPasswordScreen = () => {
           )}
 
           <View style={styles.footer}>
-            <TouchableOpacity onPress={navigateToLogin}>
-              <Text style={styles.backToLoginText}>
-                <Ionicons name="arrow-back" size={16} color={COLORS.primary} />{' '}
-                Back to Sign In
-              </Text>
+            <TouchableOpacity style={styles.backToLoginButton} onPress={navigateToLogin}>
+              <Ionicons name="arrow-back" size={16} color={COLORS.primary} />
+              <Text style={styles.backToLoginText}>Back to Sign In</Text>
             </TouchableOpacity>
           </View>
         </ScrollView>
@@ -106,6 +141,7 @@ const ForgotPasswordScreen = () => {
     </SafeAreaView>
   );
 };
+
 
 const styles = StyleSheet.create({
   scrollContent: {
@@ -151,6 +187,22 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     fontSize: 16,
   },
+  errorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.error,
+    borderRadius: 8,
+    padding: SPACING.sm,
+    marginBottom: SPACING.md,
+  },
+  errorText: {
+    color: COLORS.error,
+    fontSize: 14,
+    marginLeft: SPACING.xs,
+    flex: 1,
+  },
   resetButton: {
     marginTop: SPACING.sm,
   },
@@ -172,10 +224,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: SPACING.xl,
   },
+  backToLoginButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: SPACING.md,
+  },
   backToLoginText: {
     color: COLORS.primary,
     fontSize: 16,
     fontWeight: '600',
+    marginLeft: SPACING.xs,
   },
 });
 

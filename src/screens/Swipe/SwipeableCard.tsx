@@ -21,13 +21,11 @@ type SwipeableCardNavigationProp = StackNavigationProp<RootStackParamList, 'Swip
 type SwipeableCardProps = {
   mentor: any;
   onSwipe: (direction: 'left' | 'right') => void;
-  compatibility?: number;
 };
 
 const SwipeableCard: React.FC<SwipeableCardProps> = ({ 
   mentor, 
   onSwipe,
-  compatibility = 0
 }) => {
   const navigation = useNavigation<SwipeableCardNavigationProp>();
   const [pan] = useState(new Animated.ValueXY());
@@ -98,12 +96,9 @@ const SwipeableCard: React.FC<SwipeableCardProps> = ({
       {...panResponder.panHandlers}
     >
       <Image
-        source={{ uri: mentor.photo }}
+        source={{ uri: mentor.avatar || mentor.photo }}
         style={styles.image}
       />
-      <View style={styles.compatibilityBadge}>
-        <Text style={styles.compatibilityText}>{compatibility}% Match</Text>
-      </View>
       
       <TouchableOpacity 
         style={styles.avatarButton}
@@ -118,22 +113,22 @@ const SwipeableCard: React.FC<SwipeableCardProps> = ({
       <View style={styles.content}>
         <View style={styles.header}>
           <View>
-            <Text style={styles.name}>{mentor.name}</Text>
-            <Text style={styles.sector}>{mentor.sector}</Text>
+            <Text style={styles.name}>{mentor.name || 'User'}</Text>
+            <Text style={styles.sector}>{mentor.sector || 'Professional'}</Text>
           </View>
-          <Text style={styles.experience}>{mentor.experience}y exp</Text>
+          <Text style={styles.experience}>{mentor.experience || 0}y exp</Text>
         </View>
-        <Text style={styles.bio} numberOfLines={2}>{mentor.bio}</Text>
+        <Text style={styles.bio} numberOfLines={2}>{mentor.bio || 'No bio available'}</Text>
         <View style={styles.skillsContainer}>
-          {mentor.skills.slice(0, 2).map((skill: string, index: number) => (
+          {(mentor.skills || []).slice(0, 2).map((skill: string, index: number) => (
             <View key={index} style={styles.skillTag}>
               <Text style={styles.skillText}>{skill}</Text>
             </View>
-          ))}}
+          ))}
         </View>
         <View style={styles.footer}>
-          <Text style={styles.location}>📍 {mentor.location}</Text>
-          <Text style={styles.languages}>{mentor.languages.join(', ')}</Text>
+          <Text style={styles.location}>📍 {mentor.location || 'Location not specified'}</Text>
+          <Text style={styles.languages}>{(mentor.languages || []).join(', ') || 'Languages not specified'}</Text>
         </View>
       </View>
     </Animated.View>
@@ -159,19 +154,19 @@ const styles = StyleSheet.create({
     height: '50%',
     backgroundColor: COLORS.border,
   },
-  compatibilityBadge: {
+  avatarButton: {
     position: 'absolute',
-    top: 16,
-    right: 16,
-    backgroundColor: COLORS.primary,
-    paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.xs,
-    borderRadius: 16,
+    bottom: SPACING.lg,
+    right: SPACING.lg,
+    zIndex: 10,
   },
-  compatibilityText: {
-    color: COLORS.text,
-    fontWeight: '700',
-    fontSize: 12,
+  avatar: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    borderWidth: 2,
+    borderColor: COLORS.primary,
+    backgroundColor: COLORS.surface,
   },
   content: {
     flex: 1,
