@@ -7,7 +7,8 @@ import { COLORS, SPACING, commonStyles } from '../../theme';
 import Button from '../../components/common/Button';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { signInWithEmailAndPassword } from 'firebase/auth';
+import { auth } from '../../config/firebase';
 
 type LoginScreenNavigationProp = StackNavigationProp<RootStackParamList, 'Login'>;
 
@@ -16,39 +17,72 @@ const LoginScreen = () => {
   const [password, setPassword] = useState('');
   const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   
   const navigation = useNavigation<LoginScreenNavigationProp>();
 
-  const handleLogin = () => {
+  const validateEmail = (email: string): boolean => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  };
+
+  const getErrorMessage = (errorCode: string): string => {
+    switch (errorCode) {
+      case 'auth/invalid-email':
+        return 'Invalid email address';
+      case 'auth/user-disabled':
+        return 'This account has been disabled';
+      case 'auth/user-not-found':
+        return 'No account found with this email';
+      case 'auth/wrong-password':
+        return 'Incorrect password';
+      case 'auth/invalid-credential':
+        return 'Invalid email or password';
+      case 'auth/too-many-requests':
+        return 'Too many failed attempts. Please try again later';
+      case 'auth/network-request-failed':
+        return 'Network error. Please check your connection';
+      default:
+        return 'An error occurred. Please try again';
+    }
+  };
+
+  const handleLogin = async () => {
+    setError(null);
+    
     if (!email || !password) {
-      // Show error message
+      setError('Please fill in all fields');
       return;
     }
-    
+
+    if (!validateEmail(email)) {
+      setError('Please enter a valid email address');
+      return;
+    }
+
+    if (password.length < 6) {
+      setError('Password must be at least 6 characters');
+      return;
+    }
+  
     setIsLoading(true);
-    
-    // TODO: Implement login logic with Firebase Auth
-    console.log('Login with:', { email, password });
-    
-    // Simulate API call
-    setTimeout(async () => {
-      setIsLoading(false);
-      // Store auth token/flag to mark user as authenticated
-      try {
-        await AsyncStorage.setItem('@userToken', 'fake_token_' + Date.now());
-      } catch (error) {
-        console.error('Error storing token:', error);
-      }
-      // Navigate to main app on successful login
+    try {
+      await signInWithEmailAndPassword(auth, email.trim(), password);
+      // Navigate to Main screen after successful login
       navigation.reset({
         index: 0,
         routes: [{ name: 'Main' }],
       });
-    }, 1500);
+    } catch (error: any) {
+      const errorMessage = getErrorMessage(error.code || 'auth/unknown-error');
+      setError(errorMessage);
+      setIsLoading(false);
+    }
   };
 
   const navigateToRegister = () => {
-    navigation.navigate('Register', { role: 'mentee' });
+    // Navigate to Onboarding first so user can select their role
+    navigation.navigate('Onboarding');
   };
 
   const navigateToForgotPassword = () => {
@@ -124,11 +158,18 @@ const LoginScreen = () => {
               <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
             </TouchableOpacity>
 
+            {error && (
+              <View style={styles.errorContainer}>
+                <Ionicons name="alert-circle" size={20} color={COLORS.error} />
+                <Text style={styles.errorText}>{error}</Text>
+              </View>
+            )}
+
             <Button
               title="Sign In"
               onPress={handleLogin}
               loading={isLoading}
-              disabled={!email || !password}
+              disabled={!email || !password || isLoading}
               fullWidth
               style={styles.loginButton}
             />
@@ -205,6 +246,22 @@ const styles = StyleSheet.create({
   forgotPasswordText: {
     color: COLORS.primary,
     fontSize: 14,
+  },
+  errorContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.error,
+    borderRadius: 8,
+    padding: SPACING.sm,
+    marginBottom: SPACING.md,
+  },
+  errorText: {
+    color: COLORS.error,
+    fontSize: 14,
+    marginLeft: SPACING.xs,
+    flex: 1,
   },
   loginButton: {
     marginTop: SPACING.sm,

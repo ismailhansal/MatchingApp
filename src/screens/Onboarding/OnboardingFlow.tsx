@@ -1,11 +1,15 @@
 import React, { useState } from 'react';
-import { StyleSheet, View, TouchableOpacity, StatusBar, TextInput, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
+import { StyleSheet, View, TouchableOpacity, StatusBar, TextInput, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, Alert } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../../navigation/AppNavigator';
 import { COLORS, SPACING } from '../../theme';
 import Button from '../../components/common/Button';
 import Text from '../../components/common/Text';
+import { createUserWithEmailAndPassword } from 'firebase/auth';
+import { auth, db } from '../../config/firebase';
+import { doc, setDoc } from 'firebase/firestore';
+import { getDefaultAvatarUrl } from '../../services/imageService';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 type OnboardingFlowNavigationProp = StackNavigationProp<RootStackParamList, 'Onboarding'>;
@@ -20,18 +24,31 @@ type OnboardingStepType = {
 const OnboardingFlow = () => {
   const navigation = useNavigation<OnboardingFlowNavigationProp>();
   const [currentStep, setCurrentStep] = useState(0);
+  const [isCreatingAccount, setIsCreatingAccount] = useState(false);
+  const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [userData, setUserData] = useState({
+    email: '',
+    password: '',
+    confirmPassword: '',
+    fullName: '',
     userType: '',
     goals: '',
     skills: '',
   });
+  const [error, setError] = useState<string | null>(null);
 
   const steps: OnboardingStepType[] = [
     {
-      id: 'welcome',
-      title: 'Welcome to MentorMatch',
-      subtitle: 'Connect with professionals who can help you grow',
-      icon: '🚀',
+      id: 'email',
+      title: 'Create Your Account',
+      subtitle: 'Enter your email and password',
+      icon: '📧',
+    },
+    {
+      id: 'name',
+      title: 'What\'s your name?',
+      subtitle: 'We\'d love to know who you are',
+      icon: '👤',
     },
     {
       id: 'role',
@@ -58,25 +75,133 @@ const OnboardingFlow = () => {
       ...prev,
       [key]: value,
     }));
+    setError(null);
+  };
+
+  const validateEmail = (email: string): boolean => {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+  };
+
+  const validateCurrentStep = (): boolean => {
+    switch (currentStep) {
+      case 0: // Email & Password
+        if (!userData.email.trim()) {
+          setError('Please enter your email');
+          return false;
+        }
+        if (!validateEmail(userData.email)) {
+          setError('Please enter a valid email address');
+          return false;
+        }
+        if (!userData.password) {
+          setError('Please enter a password');
+          return false;
+        }
+        if (userData.password.length < 6) {
+          setError('Password must be at least 6 characters');
+          return false;
+        }
+        if (userData.password !== userData.confirmPassword) {
+          setError('Passwords do not match');
+          return false;
+        }
+        return true;
+      case 1: // Full Name
+        if (!userData.fullName.trim()) {
+          setError('Please enter your full name');
+          return false;
+        }
+        if (userData.fullName.trim().length < 2) {
+          setError('Please enter a valid name');
+          return false;
+        }
+        return true;
+      case 2: // Role
+        if (!userData.userType) {
+          setError('Please select your role');
+          return false;
+        }
+        return true;
+      default:
+        return true;
+    }
   };
 
   const handleNext = async () => {
+    if (!validateCurrentStep()) {
+      return;
+    }
+
     if (currentStep < steps.length - 1) {
       setCurrentStep(currentStep + 1);
     } else {
-      // Complete onboarding
-      completeOnboarding();
+      // Complete onboarding and create account
+      await completeOnboarding();
     }
   };
 
   const completeOnboarding = async () => {
+    if (isCreatingAccount) return;
+
+    setIsCreatingAccount(true);
     try {
-      // Navigate first
-      navigation.navigate('Login');
-      // Then mark first launch as complete
-      await AsyncStorage.setItem('@firstLaunch', 'false');
-    } catch (error) {
-      console.error('Error completing onboarding:', error);
+      // Create user in Firebase Auth
+      const userCredential = await createUserWithEmailAndPassword(
+        auth,
+        userData.email.trim(),
+        userData.password
+      );
+      const user = userCredential.user;
+
+      // Create global user profile in Firestore
+      await setDoc(doc(db, 'users', user.uid), {
+        id: user.uid,
+        email: user.email,
+        fullName: userData.fullName.trim(),
+        role: userData.userType,
+        createdAt: new Date().toISOString(),
+        isPublic: true,
+        avatar: getDefaultAvatarUrl(user.uid),
+      });
+
+      // Create role-specific profile document
+      const collectionName = userData.userType === 'mentor' ? 'mentors' : 'mentees';
+      await setDoc(doc(db, collectionName, user.uid), {
+        bio: '',
+        skills: userData.skills ? userData.skills.split(',').map(s => s.trim()).filter(s => s.length > 0) : [],
+        location: '',
+        experience: '',
+        education: '',
+        languages: [],
+        availability: 'anytime',
+        ...(userData.userType === 'mentor' && { hourlyRate: 0 }),
+      });
+
+      // Set flag to show profile completion reminder after 5 seconds
+      await AsyncStorage.setItem(`newAccount_${user.uid}`, 'true');
+
+      // User is now authenticated
+      // DO NOT navigate here - let the AppNavigator's onAuthStateChanged listener handle it
+      // This prevents double navigation and race conditions
+      // The auth state change will automatically trigger navigation to Main
+      
+      console.log('Account created successfully, auth state will trigger navigation');
+    } catch (error: any) {
+      console.error('Error creating account:', error);
+      let errorMessage = 'An error occurred while creating your account';
+      
+      if (error.code === 'auth/email-already-in-use') {
+        errorMessage = 'This email is already registered';
+      } else if (error.code === 'auth/invalid-email') {
+        errorMessage = 'Invalid email address';
+      } else if (error.code === 'auth/weak-password') {
+        errorMessage = 'Password is too weak';
+      }
+      
+      setError(errorMessage);
+    } finally {
+      setIsCreatingAccount(false);
     }
   };
 
@@ -102,68 +227,134 @@ const OnboardingFlow = () => {
           {/* Subtitle */}
           <Text style={styles.subtitle}>{currentStepData.subtitle}</Text>
 
-          {/* Step Content */}
-          {currentStep === 1 && (
-            <View style={styles.roleContainer}>
-              <TouchableOpacity
-                style={[
-                  styles.roleButton,
-                  userData.userType === 'mentor' && styles.roleButtonActive,
-                ]}
-                onPress={() => updateData('userType', 'mentor')}
-              >
-                <Text
-                  style={[
-                    styles.roleButtonText,
-                    userData.userType === 'mentor' && styles.roleButtonTextActive,
-                  ]}
-                >
-                  Mentor
-                </Text>
-              </TouchableOpacity>
+        {/* Step Content */}
+        {currentStep === 0 && (
+          <View style={styles.formContainer}>
+            {/* Email Input */}
+            <TextInput
+              style={styles.input}
+              placeholder="Email"
+              placeholderTextColor={COLORS.textTertiary}
+              value={userData.email}
+              onChangeText={(text) => updateData('email', text)}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
 
+            {/* Password Input */}
+            <View style={styles.passwordContainer}>
+              <TextInput
+                style={styles.passwordInput}
+                placeholder="Password"
+                placeholderTextColor={COLORS.textTertiary}
+                value={userData.password}
+                onChangeText={(text) => updateData('password', text)}
+                secureTextEntry={!isPasswordVisible}
+                autoCapitalize="none"
+              />
               <TouchableOpacity
-                style={[
-                  styles.roleButton,
-                  userData.userType === 'mentee' && styles.roleButtonActive,
-                ]}
-                onPress={() => updateData('userType', 'mentee')}
+                onPress={() => setIsPasswordVisible(!isPasswordVisible)}
+                style={styles.visibilityToggle}
               >
-                <Text
-                  style={[
-                    styles.roleButtonText,
-                    userData.userType === 'mentee' && styles.roleButtonTextActive,
-                  ]}
-                >
-                  Mentee
+                <Text style={styles.visibilityText}>
+                  {isPasswordVisible ? '👁️' : '👁️‍🗨️'}
                 </Text>
               </TouchableOpacity>
             </View>
-          )}
 
-          {currentStep === 2 && (
+            {/* Confirm Password Input */}
             <TextInput
-              style={styles.textarea}
-              placeholder="Learn web development, advance my career..."
-              placeholderTextColor={COLORS.textSecondary}
-              value={userData.goals}
-              onChangeText={(text) => updateData('goals', text)}
-              multiline
-              numberOfLines={4}
+              style={styles.input}
+              placeholder="Confirm Password"
+              placeholderTextColor={COLORS.textTertiary}
+              value={userData.confirmPassword}
+              onChangeText={(text) => updateData('confirmPassword', text)}
+              secureTextEntry={!isPasswordVisible}
+              autoCapitalize="none"
             />
-          )}
+          </View>
+        )}
 
-          {currentStep === 3 && (
-            <TextInput
-              style={styles.textarea}
-              placeholder="JavaScript, Marketing, Leadership..."
-              placeholderTextColor={COLORS.textSecondary}
-              value={userData.skills}
-              onChangeText={(text) => updateData('skills', text)}
-              multiline
-              numberOfLines={4}
-            />
-          )}
+        {currentStep === 1 && (
+          <TextInput
+            style={styles.input}
+            placeholder="John Doe"
+            placeholderTextColor={COLORS.textTertiary}
+            value={userData.fullName}
+            onChangeText={(text) => updateData('fullName', text)}
+            autoCapitalize="words"
+          />
+        )}
+
+        {currentStep === 2 && (
+          <View style={styles.roleContainer}>
+            <TouchableOpacity
+              style={[
+                styles.roleButton,
+                userData.userType === 'mentor' && styles.roleButtonActive,
+              ]}
+              onPress={() => updateData('userType', 'mentor')}
+            >
+              <Text
+                style={[
+                  styles.roleButtonText,
+                  userData.userType === 'mentor' && styles.roleButtonTextActive,
+                ]}
+              >
+                Mentor
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.roleButton,
+                userData.userType === 'mentee' && styles.roleButtonActive,
+              ]}
+              onPress={() => updateData('userType', 'mentee')}
+            >
+              <Text
+                style={[
+                  styles.roleButtonText,
+                  userData.userType === 'mentee' && styles.roleButtonTextActive,
+                ]}
+              >
+                Mentee
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {currentStep === 3 && (
+          <TextInput
+            style={styles.textarea}
+            placeholder="Learn web development, advance my career..."
+            placeholderTextColor={COLORS.textSecondary}
+            value={userData.goals}
+            onChangeText={(text) => updateData('goals', text)}
+            multiline
+            numberOfLines={4}
+          />
+        )}
+
+        {currentStep === 4 && (
+          <TextInput
+            style={styles.textarea}
+            placeholder="JavaScript, Marketing, Leadership..."
+            placeholderTextColor={COLORS.textSecondary}
+            value={userData.skills}
+            onChangeText={(text) => updateData('skills', text)}
+            multiline
+            numberOfLines={4}
+          />
+        )}
+
+        {/* Error Message */}
+        {error && (
+          <View style={styles.errorContainer}>
+            <Text style={styles.errorText}>{error}</Text>
+          </View>
+        )}
 
           {/* Progress Indicators */}
           <View style={styles.progressContainer}>
@@ -182,10 +373,18 @@ const OnboardingFlow = () => {
         {/* Button */}
         <View style={styles.buttonContainer}>
           <Button
-            title={currentStep === steps.length - 1 ? 'Get Started' : 'Next'}
+            title={
+              isCreatingAccount
+                ? 'Creating Account...'
+                : currentStep === steps.length - 1
+                ? 'Create Account'
+                : 'Next'
+            }
             onPress={handleNext}
             fullWidth
             style={styles.button}
+            disabled={isCreatingAccount}
+            loading={isCreatingAccount}
           />
         </View>
       </ScrollView>
@@ -227,6 +426,56 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: SPACING.xxl,
     lineHeight: 24,
+  },
+  formContainer: {
+    width: '100%',
+    maxWidth: 400,
+    marginBottom: SPACING.xxl,
+    gap: SPACING.md,
+  },
+  input: {
+    backgroundColor: COLORS.card,
+    borderRadius: 12,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.md,
+    color: COLORS.text,
+    fontSize: 16,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  passwordContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: COLORS.card,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+    paddingHorizontal: SPACING.md,
+  },
+  passwordInput: {
+    flex: 1,
+    paddingVertical: SPACING.md,
+    color: COLORS.text,
+    fontSize: 16,
+  },
+  visibilityToggle: {
+    padding: SPACING.sm,
+  },
+  visibilityText: {
+    fontSize: 18,
+  },
+  errorContainer: {
+    backgroundColor: `${COLORS.primary}20`,
+    borderRadius: 8,
+    padding: SPACING.md,
+    marginBottom: SPACING.lg,
+    borderLeftWidth: 4,
+    borderLeftColor: COLORS.primary,
+  },
+  errorText: {
+    color: COLORS.primary,
+    fontSize: 14,
+    fontWeight: '500',
   },
   roleContainer: {
     flexDirection: 'row',
